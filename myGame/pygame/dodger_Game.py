@@ -36,7 +36,10 @@ def load_base64_image(b64_string):
 
 pygame.init()
 
-WIDTH, HEIGHT = 800, 600
+info = pygame.display.Info()
+WIDTH, HEIGHT = info.current_w, info.current_h
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
 FPS = 60
 
 WHITE  = (255, 255, 255)
@@ -48,17 +51,18 @@ BLUE   = (50, 120, 220)
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
-font = pygame.font.SysFont(None, 36)
-font_big = pygame.font.SysFont(None, 72)
+font = pygame.font.SysFont(None, 48)
+font_big = pygame.font.SysFont(None, 120)
+font = pygame.font.SysFont("malgungothic", 28)  # ⭐ 윈도우 기본 한글폰트
 
 PLAYER_W, PLAYER_H = 50, 30
 ENEMY_W, ENEMY_H = 30, 30
 ITEM_SIZE = 25
 
 LEVELS = [
-    {"min_speed": 3, "max_speed": 5,  "spawn": 40, "label": "Lv.1"},
-    {"min_speed": 5, "max_speed": 8,  "spawn": 25, "label": "Lv.2"},
-    {"min_speed": 7, "max_speed": 12, "spawn": 15, "label": "Lv.3"},
+    {"min_speed": 3, "max_speed": 5,  "spawn": 40, "label": "Lv.1", "laser_chance": 0.01, "spike_chance": 0.01},
+    {"min_speed": 5, "max_speed": 8,  "spawn": 25, "label": "Lv.2", "laser_chance": 0.03, "spike_chance": 0.03},
+    {"min_speed": 7, "max_speed": 12, "spawn": 15, "label": "Lv.3", "laser_chance": 0.06, "spike_chance": 0.06},
 ]
 
 def spawn_enemy(level):
@@ -78,15 +82,39 @@ def draw_hud(score, level_cfg, lives):
 
 def game_over(score):
     screen.fill(GRAY)
-    screen.blit(font_big.render("GAME OVER", True, RED), (220, 220))
     screen.blit(font.render(f"Score: {score}", True, WHITE), (320, 320))
     screen.blit(font.render("R: Restart  Q: Quit", True, WHITE), (260, 380))
+    pygame.display.flip()
+def game_over(score):
+    screen.fill(GRAY)
+
+    # 텍스트 생성
+    gameover_text = font_big.render("GAME OVER", True, RED)
+    score_text = font.render(f"Score: {score}", True, WHITE)
+    info_text = font.render("R: Restart  Q: Quit", True, WHITE)
+
+    # 중앙 좌표 계산
+    gameover_rect = gameover_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 80))
+    score_rect = score_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+    info_rect = info_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 60))
+
+    # 출력
+    screen.blit(gameover_text, gameover_rect)
+    screen.blit(score_text, score_rect)
+    screen.blit(info_text, info_rect)
+
     pygame.display.flip()
 
     while True:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
+                
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+                    
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_r:
                     return True
@@ -98,7 +126,10 @@ def main():
     enemies = []
     items = []
     lasers = []
+    spikes = []
 
+    shake_timer = 0
+    shake_intensity = 0
     score = 0
     lives = 3
     spawn_timer = 0
@@ -117,6 +148,8 @@ def main():
     frame_index = 0
     frame_timer = 0
     invincible = 0
+    direction = 1  # 1: 오른쪽, -1: 왼쪽
+    
 
     while True:
         clock.tick(FPS)
@@ -128,8 +161,10 @@ def main():
         keys = pygame.key.get_pressed()
         if keys[pygame.K_LEFT] and player.left > 0:
             player.x -= 5
+            direction = -1
         if keys[pygame.K_RIGHT] and player.right < WIDTH:
             player.x += 5
+            direction = 1
 
         frame_timer += 1
         if frame_timer >= 10:
@@ -148,10 +183,17 @@ def main():
                 items.append(list(spawn_item()))
 
         # ⭐ 레이저 생성 (SFX 추가됨)
-        if random.random() < 0.03:
+        if random.random() < level["laser_chance"]:
             delay = random.randint(30, 60)
             duration = 18
             lasers.append([player.centerx, 0, delay, duration, False, 0])
+        # ⭐ 가시 생성
+        if random.random() < level["spike_chance"]:
+            x = random.randint(0, WIDTH - 40)
+            delay = random.randint(40, 80)
+            duration = 20
+            spikes.append([x, delay, duration, 0])  
+            # x, delay, duration, timer
 
         new_enemies = []
         for rect, speed in enemies:
@@ -194,9 +236,11 @@ def main():
                 duration -= 1
                 beam_rect = pygame.Rect(x - 12, 0, 24, HEIGHT)
 
-                if invincible == 0 and player.colliderect(beam_rect):
+                if invincible == 0 and hitbox.colliderect(beam_rect):
                     lives -= 1
                     invincible = 90
+                    shake_timer = 15
+                    shake_intensity = 10
 
                     if lives <= 0:
                         if game_over(score):
@@ -209,14 +253,49 @@ def main():
             new_lasers.append([x, timer, delay, duration, locked, state])
 
         lasers = new_lasers
+        
+        # 🔥 충돌 판정용 Rect (플레이어보다 작게)
+        hitbox = player.inflate(-20, -10)
+        
+        new_spikes = []
+        for x, delay, duration, timer in spikes:
+            timer += 1
+            
+            spike_rect = None  # ⭐ 항상 먼저 초기화
+
+            # 상태 0: ! 표시
+            if timer < delay:
+                pass
+
+            # 상태 1: 가시 활성
+            elif timer < delay + duration:
+                spike_rect = pygame.Rect(x + 10, HEIGHT - 60, 20, 40)
+        
+            if spike_rect and invincible == 0 and hitbox.colliderect(spike_rect):
+                lives -= 1
+                invincible = 90
+                shake_timer = 15
+                shake_intensity = 10
+
+                if lives <= 0:
+                    if game_over(score):
+                        main()
+                    return
+                
+            if timer < delay + duration:
+                new_spikes.append([x, delay, duration, timer])
+
+            spikes = new_spikes
 
         if invincible > 0:
             invincible -= 1
         else:
             for rect, _ in enemies:
-                if player.colliderect(rect):
+                if hitbox.colliderect(rect):
                     lives -= 1
                     invincible = 90
+                    shake_timer = 15
+                    shake_intensity = 10
                     enemies.clear()
 
                     if lives <= 0:
@@ -227,8 +306,9 @@ def main():
 
         new_items = []
         for rect, speed in items:
-            if player.colliderect(rect):
-                lives = min(lives + 1, 5)
+            if hitbox.colliderect(rect):
+                if lives < 3:   # ⭐ 3 미만일 때만 회복
+                    lives += 1
             else:
                 new_items.append([rect, speed])
         items = new_items
@@ -237,16 +317,27 @@ def main():
         level = LEVELS[level_idx]
 
         screen.fill(GRAY)
+        
+        offset_x = 0
+        offset_y = 0
+
+        if shake_timer > 0:
+            shake_timer -= 1
+            offset_x = random.randint(-shake_intensity, shake_intensity)
+            offset_y = random.randint(-shake_intensity, shake_intensity)
 
         if invincible == 0 or (invincible // 10) % 2 == 0:
             img = pygame.transform.scale(player_frames[frame_index], (PLAYER_W, PLAYER_H))
-            screen.blit(img, player)
+            if direction == -1:
+                img = pygame.transform.flip(img, True, False)
+            
+            screen.blit(img, (player.x + offset_x, player.y + offset_y))
 
         for rect, _ in enemies:
-            pygame.draw.rect(screen, RED, rect)
+            pygame.draw.rect(screen, RED, rect.move(offset_x, offset_y))
 
         for rect, _ in items:
-            pygame.draw.rect(screen, GREEN, rect)
+            pygame.draw.rect(screen, GREEN, rect.move(offset_x, offset_y))
 
         for x, timer, delay, duration, locked, state in lasers:
 
@@ -255,16 +346,34 @@ def main():
                 blink_speed = max(2, int(10 - progress * 8))
 
                 if (timer // blink_speed) % 2 == 0:
-                    pygame.draw.line(screen, (255, 100, 100), (x, 0), (x, HEIGHT), 5)
+                    pygame.draw.line(screen, (255, 100, 100), (x + offset_x, 0), (x + offset_x, HEIGHT), 5)
 
             elif state == 2:
                 alpha = int(128 + 127 * abs(pygame.math.Vector2(1, 0).rotate(timer * 20).x))
                 beam = pygame.Surface((50, HEIGHT), pygame.SRCALPHA)
                 beam.fill((255, 255, 255, alpha))
-                screen.blit(beam, (x - 25, 0))
+                screen.blit(beam, (x - 25 + offset_x, offset_y))
+                
+        for x, delay, duration, timer in spikes:
+
+            # 🔴 경고 (! 표시)
+            if timer < delay:
+                if (timer // 10) % 2 == 0:
+                    text = font.render("!", True, RED)
+                    screen.blit(text, (x + 10, HEIGHT - 80))
+
+            # 🔥 가시
+            else:
+                spike_points = [
+                    (x + offset_x, HEIGHT + offset_y),
+                    (x + 40 + offset_x, HEIGHT + offset_y),
+                    (x + 20 + offset_x, HEIGHT - 60 + offset_y)
+                ]
+                pygame.draw.polygon(screen, RED, spike_points)
 
         draw_hud(score, level, lives)
 
         pygame.display.flip()
 
 main()
+

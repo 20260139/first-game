@@ -14,6 +14,8 @@ pygame.mixer.init()
 
 LASER_SOUND_PATH = "./laser.wav"   # ⭐ 여기에 상대경로 (예: "./laser.wav")
 BGM_PATH = "./background.mp3"           # ⭐ 여기에 상대경로 (예: "./bgm.mp3")
+warning_sfx = pygame.mixer.Sound("warning.wav")
+warning_sfx.set_volume(0.4)
 
 laser_sfx = None
 bgm = None
@@ -22,9 +24,6 @@ try:
     if LASER_SOUND_PATH:
         laser_sfx = pygame.mixer.Sound(LASER_SOUND_PATH)
 
-    if BGM_PATH:
-        pygame.mixer.music.load(BGM_PATH)
-        pygame.mixer.music.play(-1)  # 무한 반복
 except:
     pass
 # =========================
@@ -86,6 +85,7 @@ def game_over(score):
     screen.blit(font.render("R: Restart  Q: Quit", True, WHITE), (260, 380))
     pygame.display.flip()
 def game_over(score):
+    pygame.mixer.music.stop()  # ⭐ 이거 추가
     screen.fill(GRAY)
 
     # 텍스트 생성
@@ -121,7 +121,50 @@ def game_over(score):
                 if e.key == pygame.K_q:
                     pygame.quit(); sys.exit()
 
+def show_start_screen(screen, clock):
+    font_big = pygame.font.SysFont(None, 80)
+    font_small = pygame.font.SysFont(None, 40)
+
+    while True:
+        screen.fill((0, 0, 0))
+
+        title = font_big.render("GameStart", True, (255, 255, 255))
+        start = font_small.render("Press SPACE to Start", True, (200, 200, 200))
+
+        title_rect = title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 100))
+        start_rect = start.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+
+        screen.blit(title, title_rect)
+        screen.blit(start, start_rect)
+
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    return  # 게임 시작
+
+        clock.tick(60)
+
 def main():
+    pygame.init()
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN) 
+    clock = pygame.time.Clock()
+
+    show_start_screen(screen, clock)  # ⭐ 여기 추가
+    
+    try:
+        if BGM_PATH:
+            pygame.mixer.music.load(BGM_PATH)
+            pygame.mixer.music.play(-1)
+            pygame.mixer.music.set_volume(0.5)
+    except:
+        pass
+    
     player = pygame.Rect(WIDTH//2, HEIGHT-60, PLAYER_W, PLAYER_H)
     enemies = []
     items = []
@@ -186,7 +229,9 @@ def main():
         if random.random() < level["laser_chance"]:
             delay = random.randint(30, 60)
             duration = 18
-            lasers.append([player.centerx, 0, delay, duration, False, 0])
+            lasers.append([player.centerx, 0, delay, duration, False, 0, False])
+            # 마지막 False = warning_played
+            
         # ⭐ 가시 생성
         if random.random() < level["spike_chance"]:
             x = random.randint(0, WIDTH - 40)
@@ -212,10 +257,14 @@ def main():
         items = new_items
 
         new_lasers = []
-        for x, timer, delay, duration, locked, state in lasers:
+        for x, timer, delay, duration, locked, state, warning_played in lasers:
             timer += 1
 
             if state == 0:
+                if not warning_played:
+                    warning_sfx.play()
+                    warning_played = True  # ⭐ 한 번만 재생
+                    
                 if delay - timer <= 12:
                     locked = True
                 if not locked:
@@ -250,7 +299,7 @@ def main():
                 if duration <= 0:
                     continue
 
-            new_lasers.append([x, timer, delay, duration, locked, state])
+            new_lasers.append([x, timer, delay, duration, locked, state, warning_played])
 
         lasers = new_lasers
         
@@ -299,9 +348,10 @@ def main():
                     enemies.clear()
 
                     if lives <= 0:
-                        if game_over(score):
-                            main()
-                        return
+                        result = game_over(score)
+
+                        if result == "restart":
+                            running = False   # ⭐ 현재 게임만 끝내고 다시 시작
                     break
 
         new_items = []
@@ -339,7 +389,7 @@ def main():
         for rect, _ in items:
             pygame.draw.rect(screen, GREEN, rect.move(offset_x, offset_y))
 
-        for x, timer, delay, duration, locked, state in lasers:
+        for x, timer, delay, duration, locked, state, warning_played in lasers:
 
             if state == 0:
                 progress = timer / delay

@@ -16,4 +16,5 @@ exe 파일 실행 할 때 이미지, 사운드 파일 경로를 제대로 찾기
 --add-data "sound;sound" ^
 --name=Game Game.py
 ## AI 활용 내역
-...
+-Q: 이미지가 보이지 않음
+ A: 파일 경로가 제대로 지정되지 않음
